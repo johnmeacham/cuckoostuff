@@ -1,0 +1,128 @@
+Cuckoo Byte Stuffing
+====================
+
+I introduce a byte stuffing algorithm for general use that has many
+useful properties that are not found together in other common
+algorithms. It obtains very low statistical overhead on arbitrary data
+without signifigantly increasing the entropy of the data stream by
+permuting the escape characters with a PRNG stream, rather than the raw
+data. This means that the compressibility and radix locality of the
+encoded stream is preserved.
+
+Similar to [Cuckoo Hashing](http://en.wikipedia.org/wiki/Cuckoo_hashing)
+the algorithm has a pair of escape codes from which values are ejected
+when they are shown to increase the size of the coded stream. By only
+ejecting a choice for an escape character on conflict, the algorithm is
+self optimizing, when the symbols of the data stream are not uniformly
+distributed, cuckoo stuffing achieves greater than the maximum
+theoretical effeciency for random data. In particular, ASCII and UTF8
+data have zero overhead for arbitrarily long streams.
+
+-   True online operation requiring zero bytes of lookahead, data can be
+    output as soon as it is generated. By adding a single byte of
+    lookahead the average overhead can be further reduced. Said
+    lookahead can be done opprotunistically based on data availability
+    without changing the decoder.
+
+-   The encoded byte stream preserves locality and compressibility, long
+    runs of similar values remain long runs of similar values in encoded
+    form. When possible, the stream remains unchanged aiding debugging
+    by hardware protocol analyzers. This means that the encoded stream
+    may directly be used as a radix tree key with the same efficiency as
+    the unencoded stream.
+
+-   Worst case 2x overhead but average case 0.2%, On any form of
+    structured data with a non uniform distribution, the overhead
+    asymptotically approaches zero. unlike other probabalistic
+    algorithms the average case is over arbitrary data, not just random
+    data. There are no generic pathological patterns to exploit.
+
+-   Requires only 7 bytes of overhead for coding/decoding and no buffer.
+    An implementation that takes only about 100 words of program memory
+    on an atmega 8 bit mcu is provided. The PRNG is chosen to be
+    particularly fast on both 8 bit and 32/64 bit architectures. Coding
+    is extremely fast as PRNG only needs to be run on the rare
+    collision.
+
+-   Sample implementation released under completely free open source BSD
+    style license.
+
+Algorithm
+=========
+
+Encoding takes a byte stream with arbitrary binary data and produces a
+byte stream that never has a byte equal to zero within it. Decoding
+inverts this process.
+
+The algorithm relys on a PRNG that can generate a random sequence of
+bytes. At any given point, there are two escape codes active, e1 and e2.
+e1 is used to replace the zero byte, e2 is used to indicate that a
+literal e1 or e2 needs to be inserted. When a literal e1 or e2 occurs in
+the stream, it is replaced by the sequence `e2 e1` or `e2 e2`
+respectively and a new escape value is chosen by iterating the PRNG
+until the next number that is not zero and not equal to the other escape
+code. A new code is chosen *only* when a two byte escape code is
+generated.
+
+Bytestream format
+-----------------
+
+The decoding rules are as follows:
+
+    e1 -> 0
+    e2 e1 -> e1  and replace e1 with next code in sequence.
+    e2 e2 -> e2  and replace e2 with next code in sequence.
+    e2 x | x not in {e1,e2} -> e2 x
+    x -> x
+
+The encoding rules are the opposite:
+
+    0 -> e1
+    e1 -> e2 e1  and replace e1 with next code in sequence.
+    e2 x | x not in {e1,e2,0} -> e2 x
+    e2 -> e2 e2  and replace e2 with next code in sequence.
+    x -> x
+
+Specifics
+=========
+
+The PRNG chosen is based on an 8 bit xorshift algorithm, It performs
+very well on the [Diehard
+tests](http://en.wikipedia.org/wiki/Diehard_tests) and although
+specified as an 8 bit algorithm, it admits a particularly fast
+implementation on 32 or 64 bit architectures where the 4 middle ops can
+be replaced by a single shift in a full register.
+
+    #define INIT_CODE_STATE {  .x = 21, .y = 229, .z = 181, .w = 51 }
+    struct ecode_generator_state { uint8_t x, y, z, w; };
+
+    uint8_t
+    next_ecode(struct ecode_generator_state *s, uint8_t verboten)
+    {
+            do {
+                    uint8_t t = s->x ^ (s->x << 3);
+                    s->x = s->y; s->y = s->z; s->z = s->w;
+                    s->w = s->w ^ (s->w >> 5) ^ (t ^ (t >> 2));
+            } while (!s->w || s->w == verboten);
+            return s->w;
+    }
+
+The initial values for E1 and E2 are
+
+    #define INIT_E1 0xC1
+    #define INIT_E2 0xF8
+
+These were chosen to give a good chance of zero overhead on common data
+streams.
+
+-   Neither occurs in ASCII
+-   Neither will ever appear in valid UTF8 data
+-   Do not correspond to any common pad values in binary data protocols
+
+Code
+====
+
+-   [cuckoostuff.h](http://repetae.net/repos/cuckoostuff/cuckoostuff.h)
+-   [cuckoostuff.c](http://repetae.net/repos/cuckoostuff/cuckoostuff.c)
+-   [Makefile](http://repetae.net/repos/cuckoostuff/Makefile)
+
